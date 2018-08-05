@@ -2,8 +2,6 @@
 #include <stdlib.h>
 #include "mpc.h"
 
-
-
 /*
 
 Interactive prompt
@@ -25,6 +23,12 @@ Interactive prompt
 
  mpc library used for language construction 
 
+ S-Expressions: an internal list structure that is built up recursively 
+ of numbers, symbols, and other lists. Used to store the program in Lisp
+
+
+ build command
+ cc -std=c99 -Wall parsing.c mpc.c -ledit -lm -o parsing
 */
 
 
@@ -62,25 +66,226 @@ void add_history(char* unused){}
 #include <editline/readline.h>
 #endif
 
-//does the math evaluation between x y and the operator 
-long eval_op(long x, char* op, long y){
-	//strcmp returns 0 if the two strings are equal 
-	if(strcmp(op, "+") == 0){ return x + y; }
-	if(strcmp(op, "-") == 0){ return x - y; }
-	if(strcmp(op, "*") == 0){ return x * y; }
-	if(strcmp(op, "/") == 0){ return x / y; }
 
-	return 0;
+
+//Error handling, this struct will be used so that an expression will evaluate 
+//to a number or an error
+typedef struct{
+	//type determines whether the lval object is a number or an error
+	int type;
+	long num;
+
+	//err and sym types have some string data
+	char* err;
+	char* sym;
+
+	//counter and lval list 
+	//S-Expressions are variable length lists of other values.
+	//this will be stored in cell 
+
+	//lval with type SEXPR will use count and cell 
+	int count;
+	//we put 'struct' here because we dont want the pointer to refer to itself
+	struct lval** cell;
+
+
+
+}lval;
+
+//enum is used to assign names to an integer constant 
+//creates an enumeration of possible lval types 
+
+//Chapter 9: added 2 more types, LVAL_SYM, LVAL_SEXPR, for S-Expressions
+enum{LVAL_ERR, LVAL_NUM, LVAL_SYM, LVAL_SEXPR};
+
+//creates an enumeration of possible lval err values
+//enum{LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM}; //orignal Error enum 
+
+
+/* LVAL CONSTRUCTORS */
+//lval constructors now return a pointer to lval object, this will
+//make it easier to reference in a lval cell list
+
+//constructs a pointer to lval type number
+lval* lval_num(long x){
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_NUM;
+	v->num = x;
+	return v;
+
+}
+
+//constructs a pointer to lval type err
+lval* lval_err(char* x){
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_ERR;
+
+	//allocate memory to err string
+	//we add +1 because strlen() doesn't include the null terminator 
+	//thus we add +1 so that there is enough allocated space 
+	v->err = malloc(strlen(x) + 1);
+	//copies parameter to err
+	strcpy(v->err, x);
+	return v;
+
+}
+
+//constructs a pointer to a lval type symbol
+lval* lval_sym(char* s){
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_SYM;
+	v->sym = malloc(strlen(s) + 1);
+	strcpy(v->sym, s);
+	return v;
+
+}
+
+//constructs a pointer to a lval type sexpr with an empty  cell
+lval* lval_sexpr(void){
+	lval* v = malloc(sizeof(lval));
+	v->type = LVAL_SEXPR;
+	v->count = 0;
+	v->cell = NULL;
+	return v;
+
+}
+
+/* DEALLOCATOR FOR LVAL */
+void lval_del(lval* v){
+	switch(v->type){
+
+		//do nothing for number types
+		case LVAL_NUM: break;
+
+		//ERR and SYM, free allocated char memory
+		case LVAL_ERR:
+			free(v->err);
+			break;
+		case LVAL_SYM:
+			free(v->sym);
+			break;
+
+		case LVAL_SEXPR:
+			//deallocates each lval in the cell
+			for(int i =0; i<v->count; i++){
+				lval_del(v->cell[i]);
+			}
+			//deallocates the memory to contain the pointers to lval
+			free(v->cell);	 
+			break;
+	}
+	//finally deallocates the pointer to v 
+	free(v);
+
+}
+
+/* READING EXPRESSION FUNCTIONS */
+
+//parsing though the mpc input tree, number values are
+//still strings, we need to convert them before we call our number constructor
+lval* lval_read_num(mpc_ast_t* t){
+	errno = 0;
+	//converts t's content to long
+	long x = strtol(mpc_ast_t->contents, NULL, 10);
+	return errno != ERANGE ? lval_num(x) : lval_err("invalid_number");
+
+}
+
+//lval_read recurssion function, goes through mpc_ast_t tree
+//creates lval objects for according tags
+lval* lval_read(mpc_ast_t* t){
+
+	//if the tag of t is number or symbol, we directly return a lval* 
+	//base case 
+	if(strcmp(mpc_ast_t->tag, "number")){ return lval_read_num(t)};
+	if(strcmp(mpc_ast_t->tag, "symbol")){return lval_sym(t->contents)};
+
+	//if root (>) or sexpr then create an new lval type sexpr
+	lval* x = NULL;
+	if(strcmp(t->tag, ">")){x = lval_sexpr();}
+	if(strcmp(t->tag,"sexpr")){x = lval_sexpr();}
+
+	//fills in lval type sexpr cell list 
+	for(int i =0; i<t->children_cnum; i++){
+		if(strcmp(t->children[i]->contents, "(" )){ continue; }
+	}
+
+
+
+
+
+
+}
+
+
+
+
+
+//prints out lval
+void lval_print(lval v){
+	switch(v.type){
+		//lval type number case
+		case LVAL_NUM:
+			//prints the long value
+			printf("%li\n", v.num);
+			break;
+
+		case LVAL_ERR:
+			if(v.err == LERR_DIV_ZERO){
+				puts("Error: Cannot divide by zero");
+			}
+			else if(v.err == LERR_BAD_NUM){
+				puts("Error: Invalid number");
+			}
+			else if(v.err == LERR_BAD_OP){
+				puts("Error: Invalid operator");
+			}
+			break;
+
+
+
+	}
+
+}
+
+
+//does the math evaluation between x y and the operator 
+lval eval_op(lval x, char* op, lval y){
+	//if either x or y type is error, return it
+	if(x.type == LVAL_ERR){ return x; }
+	if(y.type == LVAL_ERR){ return y; }
+
+	//strcmp returns 0 if the two strings are equal 
+	//returns a lval object with num equal to performed operation 
+	if(strcmp(op, "+") == 0){ return lval_num(x.num + y.num); }
+	else if(strcmp(op, "-") == 0){ return lval_num(x.num - y.num); }
+	else if(strcmp(op, "*") == 0){ return lval_num(x.num * y.num); }
+	else if(strcmp(op, "/") == 0){ 
+		if(y.num == 0){
+			return lval_err(LERR_DIV_ZERO);
+		}
+
+		return lval_num(x.num / y.num); 
+	}
+
+	//if none of the operator if statements are satisified, return a
+	//lval with type error and err value of LERR_BAD_OP
+	return lval_err(LERR_BAD_OP);
 }
 
 //recursion to evaluate the AST tree
-long eval(mpc_ast_t* t){
+lval eval(mpc_ast_t* t){
 	//base case
 	//strstr checks if the second string is a substring of the first
 	//tags in the AST tree are nested, ex: expr|number|regex
 	if(strstr(t->tag, "number") ){ 
-		//converts the string into an int
-		return atoi(t->contents);
+		//checks if there is an error in number conversion 
+		//if there is, return a lval object with type error and err value of 
+		//LERR_BAD_NUM
+		errno = 0;
+		long x = strtol(t->contents, NULL, 10);
+		return errno != ERANGE ? lval_num(x) : lval_err(LERR_BAD_NUM);
+		
 	}
 
 	//the operator is always the second child in the AST structure
@@ -90,7 +295,7 @@ long eval(mpc_ast_t* t){
 	//the third child is the expr, which we recursively call on
 	//expr childs can have the tag "number" or >, if it has > it will
 	//be a root node of its own tree
-	long x = eval(t->children[2]);
+	lval x = eval(t->children[2]);
 
 	//iterate through the rest of the child nodes
 	//we start at int i = 3 because we want to access the 4th child since
@@ -117,8 +322,12 @@ int main(int argc, char** argv){
 	//we dynamically create new parser objects 
 	//the first 3 parsers essentially build the structure of our "sentences"
 	//hence: the grammar
+
+	//Chapter 9 update
+	//edited towards S-Expressions
 	mpc_parser_t* Number = mpc_new("number");
-	mpc_parser_t* Operator = mpc_new("operator");
+	mpc_parser_t* Symbol = mpc_new("symbol");
+	mpc_parser_t* Sexpr = mpc_new("sexpr");
 	mpc_parser_t* Expr = mpc_new("expr");
 	//This parser is essentially the "sentence" itself, it will be built
 	//from the components above 
@@ -128,15 +337,15 @@ int main(int argc, char** argv){
 	//uses Regular expressions to define rules 
 
 
-
 	mpca_lang(MPCA_LANG_DEFAULT, 
 		"                                                    \
 		number   : /-?[0-9]+/ ;                              \
-		operator : '+' | '-' | '*' | '/';                    \
-		expr     : <number> | '(' <operator> <expr>+ ')';    \
-		jlispy   : /^/ <operator> <expr>+ /$/ ;              \
+		symbol   : '+' | '-' | '*' | '/';                    \
+		sexpr     : '('<expr>*')';                           \
+		expr    : <number> | <symbol> | <sexpr>;             \
+		jlispy   : /^/ <expr>* /$/ ;                         \
 		",
-		Number, Operator, Expr, Jlispy);
+		Number, Symbol, Sexpr, Expr, Jlispy);
 
 
 
@@ -166,10 +375,13 @@ int main(int argc, char** argv){
 
 			mpc_ast_t* a = r.output;
 
+
+
 			//recursively goes through the AST tree
 			//outputs the mathmatical evaluation of the input
-			long results = eval(a);
-			printf("Results: %li\n", results);
+			// lval results = eval(a);
+			// lval_print(results);
+
 
 			//deallocates the mpc_ast_t object
 			mpc_ast_delete(a);
@@ -190,7 +402,7 @@ int main(int argc, char** argv){
 	}
 
 	//deletes our parsers 
-	mpc_cleanup(4, Number, Operator, Expr, Jlispy);
+	mpc_cleanup(5, Number, Symbol, Sexpr, Expr, Jlispy);
 
 	return 0;
 }
