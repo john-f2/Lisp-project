@@ -70,7 +70,7 @@ void add_history(char* unused){}
 
 //Error handling, this struct will be used so that an expression will evaluate 
 //to a number or an error
-typedef struct{
+typedef struct lval{
 	//type determines whether the lval object is a number or an error
 	int type;
 	long num;
@@ -172,7 +172,7 @@ void lval_del(lval* v){
 			}
 			//deallocates the memory to contain the pointers to lval
 			free(v->cell);	 
-			break;
+		break;
 	}
 	//finally deallocates the pointer to v 
 	free(v);
@@ -186,10 +186,13 @@ void lval_del(lval* v){
 lval* lval_read_num(mpc_ast_t* t){
 	errno = 0;
 	//converts t's content to long
-	long x = strtol(mpc_ast_t->contents, NULL, 10);
+	long x = strtol(t->contents, NULL, 10);
 	return errno != ERANGE ? lval_num(x) : lval_err("invalid_number");
 
 }
+
+//foward declaration
+lval* lval_add(lval* v, lval* y);
 
 //lval_read recurssion function, goes through mpc_ast_t tree
 //creates lval objects for according tags
@@ -197,122 +200,306 @@ lval* lval_read(mpc_ast_t* t){
 
 	//if the tag of t is number or symbol, we directly return a lval* 
 	//base case 
-	if(strcmp(mpc_ast_t->tag, "number")){ return lval_read_num(t)};
-	if(strcmp(mpc_ast_t->tag, "symbol")){return lval_sym(t->contents)};
+	if(strstr(t->tag, "number")){ return lval_read_num(t);}
+	if(strstr(t->tag, "symbol")){return lval_sym(t->contents);}
 
 	//if root (>) or sexpr then create an new lval type sexpr
 	lval* x = NULL;
-	if(strcmp(t->tag, ">")){x = lval_sexpr();}
-	if(strcmp(t->tag,"sexpr")){x = lval_sexpr();}
+	if(strcmp(t->tag, ">") == 0){x = lval_sexpr();}
+	if(strstr(t->tag,"sexpr")){x = lval_sexpr();}
 
 	//fills in lval type sexpr cell list 
-	for(int i =0; i<t->children_cnum; i++){
-		if(strcmp(t->children[i]->contents, "(" )){ continue; }
+	for(int i =0; i<t->children_num; i++){
+		//if contents are the following, ingnore them and continue the loop
+		if(strcmp(t->children[i]->contents, "(" )==0){ continue; }
+		if(strcmp(t->children[i]->contents, ")" )==0){ continue; }
+		if(strcmp(t->children[i]->tag, "regex" )==0){ continue; }
+
+		//lval_read recursively called on the children
+		//added to x's cell
+		x = lval_add(x, lval_read(t->children[i]));
+
 	}
-
-
-
-
-
+	return x;
 
 }
 
+//adds lval y to lval v's cell
+lval* lval_add(lval* v, lval* y){
+	v->count++;
+	//reallocates the size of v
+	v->cell = realloc(v->cell, sizeof(lval*) * v->count);
+	//sets the last cell in the list to y
+	v->cell[v->count-1] = y;
+
+	return v;
+}
+
+/* LVAL Printing Functions */
+
+//forward declaration of lval_print
+void lval_print(lval* v);
+
+//this function will be called when the lval type is SEXPR
+//open and close will be '(' and ')' from lval_print
+void lval_expr_print(lval* v, char open, char close){
+
+	//putchar writes a character to stdout
+	putchar(open);
+
+	//remember v will be the root of the tree
+	for(int i =0; i< v->count; i++){
+
+		//prints values within cell
+		lval_print(v->cell[i]);
+
+		//prints trailing space when element is not last 
+		if(i != (v->count-1)){
+			putchar(' ');
+		}
+	}
+	putchar(close);
 
 
+} 
 
 
 //prints out lval
-void lval_print(lval v){
-	switch(v.type){
+void lval_print(lval* v){
+	switch(v->type){
 		//lval type number case
 		case LVAL_NUM:
 			//prints the long value
-			printf("%li\n", v.num);
+			printf("%li", v->num);
 			break;
-
 		case LVAL_ERR:
-			if(v.err == LERR_DIV_ZERO){
-				puts("Error: Cannot divide by zero");
-			}
-			else if(v.err == LERR_BAD_NUM){
-				puts("Error: Invalid number");
-			}
-			else if(v.err == LERR_BAD_OP){
-				puts("Error: Invalid operator");
-			}
+			printf("Error: %s",v->err );
+			break;
+		case LVAL_SYM:
+			printf("%s", v->sym);
+			break;
+		case LVAL_SEXPR:
+			//if the lval is a sexpr, when we print, we encase it with ()
+			lval_expr_print(v, '(',')');
 			break;
 
-
-
 	}
 
 }
 
-
-//does the math evaluation between x y and the operator 
-lval eval_op(lval x, char* op, lval y){
-	//if either x or y type is error, return it
-	if(x.type == LVAL_ERR){ return x; }
-	if(y.type == LVAL_ERR){ return y; }
-
-	//strcmp returns 0 if the two strings are equal 
-	//returns a lval object with num equal to performed operation 
-	if(strcmp(op, "+") == 0){ return lval_num(x.num + y.num); }
-	else if(strcmp(op, "-") == 0){ return lval_num(x.num - y.num); }
-	else if(strcmp(op, "*") == 0){ return lval_num(x.num * y.num); }
-	else if(strcmp(op, "/") == 0){ 
-		if(y.num == 0){
-			return lval_err(LERR_DIV_ZERO);
-		}
-
-		return lval_num(x.num / y.num); 
-	}
-
-	//if none of the operator if statements are satisified, return a
-	//lval with type error and err value of LERR_BAD_OP
-	return lval_err(LERR_BAD_OP);
+void lval_println(lval* v){
+	lval_print(v);
+	putchar('\n');
 }
 
-//recursion to evaluate the AST tree
-lval eval(mpc_ast_t* t){
-	//base case
-	//strstr checks if the second string is a substring of the first
-	//tags in the AST tree are nested, ex: expr|number|regex
-	if(strstr(t->tag, "number") ){ 
-		//checks if there is an error in number conversion 
-		//if there is, return a lval object with type error and err value of 
-		//LERR_BAD_NUM
-		errno = 0;
-		long x = strtol(t->contents, NULL, 10);
-		return errno != ERANGE ? lval_num(x) : lval_err(LERR_BAD_NUM);
-		
+lval* lval_eval(lval* v);
+lval* lval_pop(lval* v, int index);
+lval* lval_take(lval* v, int index);
+lval* builtin_op(lval* v, char* op);
+
+/* Eval functions */
+
+//evaluates the lval, starts by evaluating the children first
+//if any child is an error, return that lval
+//if the lval is an empty expression, hence (), return the lval directly 
+//if the lval is a single expression, hence (5), return the single expression
+lval* lval_eval_sexpr(lval* v){
+
+	//Evaluates children 
+	for(int i =0; i< v->count; i++){
+		//evaulates each children
+		//transforms each child and sets it in original cell 
+		v->cell[i] = lval_eval(v->cell[i]);
+
 	}
 
-	//the operator is always the second child in the AST structure
-	//the first child will either be 'regex' or '('
-	char* op = t->children[1]->contents;
+	//checks children for errors, returns child if error found
+  	for (int i = 0; i < v->count; i++) {
+    	if (v->cell[i]->type == LVAL_ERR) { return lval_take(v, i); }
+  	}
 
-	//the third child is the expr, which we recursively call on
-	//expr childs can have the tag "number" or >, if it has > it will
-	//be a root node of its own tree
-	lval x = eval(t->children[2]);
+	//checks empty expression
+	if(v->count == 0){ 
 
-	//iterate through the rest of the child nodes
-	//we start at int i = 3 because we want to access the 4th child since
-	//we evaluate the third child as x
-	//the reason why we evaluate the third child into x is because we want a variable
-	//we can multiply all the child nodes into
-	int i = 3;
-	while(strstr(t->children[i]->tag, "expr")){
-		//this is where we will do the rest of the recursion on the other child nodes
-		//eval_op function is where we will do the actual computation 
-		x = eval_op(x, op, eval(t->children[i]));
-		i++;
+		return v; 
 	}
 
+	//checks single expression
+	if(v->count == 1){
+		return lval_take(v,0);
+	}
 
+	//ensure first element is a symbol
+	//if not, return error
+	lval* f = lval_pop(v, 0);
+	if(f->type != LVAL_SYM){
+		lval_del(f);
+		lval_del(v);
+		return lval_err("S-Expression does not start with symbol");
+	}
+
+	//call builtin with operator
+	//evaluates lval with symbol
+	lval* result = builtin_op(v, f->sym);
+	lval_del(f);
+	return result;
+
+
+}
+
+lval* lval_eval(lval* v){
+	//evaluates sexpr expressions
+	if(v->type == LVAL_SEXPR){
+		return lval_eval_sexpr(v);
+	}
+	//return all other types 
+	return v;
+}
+
+//pops lval object at index from v's cell list
+//we popout the symbol, so that we can just have a "list" of numbers to
+//do the evalutation on
+lval* lval_pop(lval* v, int index){
+	//gets lval at index
+	lval* x = v->cell[index];
+
+	//shifts memory after lval at index is popped
+	memmove(&v->cell[index], &v->cell[index+1],sizeof(lval*) * (v->count-index-1) );
+
+	//descrease count after popping item
+	v->count--;
+
+	//reallocates lval cell memory
+	v->cell = realloc(v->cell, sizeof(lval*) * v->count);
+
+	//return popped object
 	return x;
+
 }
+
+//gets the lval at index and deletes original lval object afterwards
+lval* lval_take(lval* v, int index){
+	lval* x = lval_pop(v, index);
+	lval_del(v);
+	return x;
+
+}
+
+//takes in a lval object which represents all the 
+lval* builtin_op(lval* a, char* op){
+
+	//checks if all objects in v are numbers
+	for(int i=0; i< a->count; i++){
+		if(a->cell[i]->type != LVAL_NUM){
+			lval_del(a);
+			return lval_err("Error: Cannot operator on non-numerics");
+		}
+	}
+
+	//pops the first element
+	//all evaluations will be stored in x
+	lval* x = lval_pop(a,0);
+
+	//if no arguments and sub then perform unary negation
+	//hence, if a is just a number with no other expressions and has a op of '-' 
+	//then we just make it negative
+	if((strcmp(op,"-") == 0 ) && a->count ==0){
+		x->num = -x->num;
+	}
+
+	//while there are still remaining elements 
+	while(a->count > 0){
+
+		//pops the next element
+		lval* y = lval_pop(a,0);
+
+		//strcmp returns 0 if the two strings are equal 
+		//returns a lval object with num equal to performed operation 
+		if(strcmp(op, "+") == 0){ x->num += y->num; }
+		else if(strcmp(op, "-") == 0){ x->num -= y->num; }
+		else if(strcmp(op, "*") == 0){ x->num *= y->num; }
+		else if(strcmp(op, "/") == 0){ 
+			if(y->num == 0){
+				return lval_err("Error: Division by Zero");
+				break;
+			}
+
+			x->num /= y->num; 
+		}
+		//deallocate y after evaluation
+		lval_del(y);
+	}
+	//deallocate a after evaluation
+	lval_del(a);
+	return x;
+
+
+}
+
+// //does the math evaluation between x y and the operator 
+// lval eval_op(lval x, char* op, lval y){
+// 	//if either x or y type is error, return it
+// 	if(x.type == LVAL_ERR){ return x; }
+// 	if(y.type == LVAL_ERR){ return y; }
+
+// 	//strcmp returns 0 if the two strings are equal 
+// 	//returns a lval object with num equal to performed operation 
+// 	if(strcmp(op, "+") == 0){ return lval_num(x.num + y.num); }
+// 	else if(strcmp(op, "-") == 0){ return lval_num(x.num - y.num); }
+// 	else if(strcmp(op, "*") == 0){ return lval_num(x.num * y.num); }
+// 	else if(strcmp(op, "/") == 0){ 
+// 		if(y.num == 0){
+// 			return lval_err(LERR_DIV_ZERO);
+// 		}
+
+// 		return lval_num(x.num / y.num); 
+// 	}
+
+// 	//if none of the operator if statements are satisified, return a
+// 	//lval with type error and err value of LERR_BAD_OP
+// 	return lval_err(LERR_BAD_OP);
+// }
+
+// //recursion to evaluate the AST tree
+// lval eval(mpc_ast_t* t){
+// 	//base case
+// 	//strstr checks if the second string is a substring of the first
+// 	//tags in the AST tree are nested, ex: expr|number|regex
+// 	if(strstr(t->tag, "number") ){ 
+// 		//checks if there is an error in number conversion 
+// 		//if there is, return a lval object with type error and err value of 
+// 		//LERR_BAD_NUM
+// 		errno = 0;
+// 		long x = strtol(t->contents, NULL, 10);
+// 		return errno != ERANGE ? lval_num(x) : lval_err(LERR_BAD_NUM);
+		
+// 	}
+
+// 	//the operator is always the second child in the AST structure
+// 	//the first child will either be 'regex' or '('
+// 	char* op = t->children[1]->contents;
+
+// 	//the third child is the expr, which we recursively call on
+// 	//expr childs can have the tag "number" or >, if it has > it will
+// 	//be a root node of its own tree
+// 	lval x = eval(t->children[2]);
+
+// 	//iterate through the rest of the child nodes
+// 	//we start at int i = 3 because we want to access the 4th child since
+// 	//we evaluate the third child as x
+// 	//the reason why we evaluate the third child into x is because we want a variable
+// 	//we can multiply all the child nodes into
+// 	int i = 3;
+// 	while(strstr(t->children[i]->tag, "expr")){
+// 		//this is where we will do the rest of the recursion on the other child nodes
+// 		//eval_op function is where we will do the actual computation 
+// 		x = eval_op(x, op, eval(t->children[i]));
+// 		i++;
+// 	}
+
+
+// 	return x;
+// }
 
 
 int main(int argc, char** argv){
@@ -374,6 +561,9 @@ int main(int argc, char** argv){
 		if(mpc_parse("<stdin>", input, Jlispy, &r)){
 
 			mpc_ast_t* a = r.output;
+			//used to printout the mpc_ast_t tree
+			// '>' is the root 
+			//mpc_ast_print(a);
 
 
 
@@ -381,6 +571,10 @@ int main(int argc, char** argv){
 			//outputs the mathmatical evaluation of the input
 			// lval results = eval(a);
 			// lval_print(results);
+
+			lval* x = lval_eval(lval_read(a));
+			lval_println(x);
+			lval_del(x);
 
 
 			//deallocates the mpc_ast_t object
