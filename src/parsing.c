@@ -24,7 +24,11 @@ Interactive prompt
  mpc library used for language construction 
 
  S-Expressions: an internal list structure that is built up recursively 
- of numbers, symbols, and other lists. Used to store the program in Lisp
+ of numbers, symbols, and other lists. Used to store the program in Lisp. 
+ S-expression is represented in ( )
+
+ While in Q-expressions ("quoted expressions"), the Lisp will not evaluate 
+ the expression but instead store it
 
 
  build command
@@ -96,7 +100,7 @@ typedef struct lval{
 //creates an enumeration of possible lval types 
 
 //Chapter 9: added 2 more types, LVAL_SYM, LVAL_SEXPR, for S-Expressions
-enum{LVAL_ERR, LVAL_NUM, LVAL_SYM, LVAL_SEXPR};
+enum{LVAL_ERR, LVAL_NUM, LVAL_SYM, LVAL_SEXPR, LVAL_QEXPR};
 
 //creates an enumeration of possible lval err values
 //enum{LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM}; //orignal Error enum 
@@ -150,6 +154,16 @@ lval* lval_sexpr(void){
 
 }
 
+//constructor for Qexpr
+lval* lval_qexpr(void){
+	lval* v=malloc(sizeof(lval));
+	v->type = LVAL_QEXPR;
+	v->count = 0;
+	v->cell = NULL;
+	return v;
+
+}
+
 /* DEALLOCATOR FOR LVAL */
 void lval_del(lval* v){
 	switch(v->type){
@@ -165,7 +179,9 @@ void lval_del(lval* v){
 			free(v->sym);
 			break;
 
+		//if lval type is LVAL_SEXPR or LVAL_QEXPR
 		case LVAL_SEXPR:
+		case LVAL_QEXPR:
 			//deallocates each lval in the cell
 			for(int i =0; i<v->count; i++){
 				lval_del(v->cell[i]);
@@ -207,12 +223,15 @@ lval* lval_read(mpc_ast_t* t){
 	lval* x = NULL;
 	if(strcmp(t->tag, ">") == 0){x = lval_sexpr();}
 	if(strstr(t->tag,"sexpr")){x = lval_sexpr();}
+	if(strstr(t->tag, "qexpr"))  { x = lval_qexpr(); }
 
 	//fills in lval type sexpr cell list 
 	for(int i =0; i<t->children_num; i++){
 		//if contents are the following, ingnore them and continue the loop
 		if(strcmp(t->children[i]->contents, "(" )==0){ continue; }
 		if(strcmp(t->children[i]->contents, ")" )==0){ continue; }
+		if(strcmp(t->children[i]->contents, "{")==0){ continue; }
+		if(strcmp(t->children[i]->contents, "}")==0){ continue; }
 		if(strcmp(t->children[i]->tag, "regex" )==0){ continue; }
 
 		//lval_read recursively called on the children
@@ -282,6 +301,9 @@ void lval_print(lval* v){
 			//if the lval is a sexpr, when we print, we encase it with ()
 			lval_expr_print(v, '(',')');
 			break;
+		case LVAL_QEXPR:
+			lval_expr_print(v, '{','}');
+			break;
 
 	}
 
@@ -296,6 +318,7 @@ lval* lval_eval(lval* v);
 lval* lval_pop(lval* v, int index);
 lval* lval_take(lval* v, int index);
 lval* builtin_op(lval* v, char* op);
+lval* builtin(lval* a, char* func);
 
 /* Eval functions */
 
@@ -340,7 +363,7 @@ lval* lval_eval_sexpr(lval* v){
 
 	//call builtin with operator
 	//evaluates lval with symbol
-	lval* result = builtin_op(v, f->sym);
+	lval* result = builtin(v, f->sym);
 	lval_del(f);
 	return result;
 
@@ -436,6 +459,124 @@ lval* builtin_op(lval* a, char* op){
 
 }
 
+//MACRO: reprocessor statement for creating 
+//function-like-things that are evaluated before the program is compiled.
+//can be used to do better error checking
+//its like python assert statments 
+
+#define LASSERT(args, cond, err) \
+	if(!(cond)){lval_del(args); return lval_err(err);}
+
+//q expressions
+lval* builtin_head(lval* a){
+
+	//error checking
+
+	//the lval we are passing in essentially holds another lval object
+	//that will contain the data, hence, a lval object type qexpr will have 
+	//one lval object in it's cell with all the other numbers/expressions
+	LASSERT(a, a->count != 1,"Function 'head' passed too many arguments!");
+
+	LASSERT(a, a->cell[0]->type != LVAL_QEXPR, "Function 'head' passed incorrect types!");
+
+	LASSERT(a,a->cell[0]->count == 0, "Function 'head' passed {}!");
+
+	lval* v = lval_take(a, 0);
+	while(v->count > 1){
+		lval_del(lval_pop(v,1));
+
+	}
+	return v;
+
+
+
+}
+
+lval* builtin_tail(lval* a){
+	//error checking
+	LASSERT(a, a->count != 1,"Function 'head' passed too many arguments!");
+
+	LASSERT(a, a->cell[0]->type != LVAL_QEXPR, "Function 'head' passed incorrect types!");
+
+	LASSERT(a,a->cell[0]->count == 0, "Function 'head' passed {}!");
+
+	lval* v= lval_take(a,0);
+	//delete and return the first item 
+	lval_del(lval_pop(v,0));
+	return v;
+
+
+}
+
+//converts a s-expression into a q-expression
+lval* builtin_list(lval* a){
+	a->type = LVAL_QEXPR;
+	return a;
+
+}
+
+//converts q-expression to s-expression
+lval* builtin_eval(lval* a){
+	//error checking
+	LASSERT(a, a->count != 1,"Function 'head' passed too many arguments!");
+
+	LASSERT(a, a->cell[0]->type != LVAL_QEXPR, "Function 'head' passed incorrect types!");
+
+	//gets the stored values
+	lval* x = lval_take(a,0);
+
+	//converts the stored lval into type LVAL_SEXPR
+	x->type = LVAL_SEXPR;
+	return lval_eval(x);
+
+
+
+}
+
+lval* lval_join(lval* x, lval* y);
+
+//first check if all arguments are q expressions
+//then we join them one by one
+lval* builtin_join(lval* a){
+
+	//checks if all arguments are q-expressions
+	for(int i=0; i<a->count; i++){
+		LASSERT(a, a->cell[i]->type != LVAL_QEXPR, "Function 'head' passed incorrect types!");
+
+	}
+
+	//the lval expressions will be joined into x
+	lval* x = lval_pop(a, 0);
+	while(a->count){
+		x=lval_join(x, lval_pop(a,0));
+	}
+
+	lval_del(a);
+	return x;
+
+}
+
+lval* lval_join(lval* x, lval* y){
+	while(y->count){
+		x = lval_add(x, lval_pop(y,0));
+
+	}
+	lval_del(y);
+	return x;
+
+}
+
+lval* builtin(lval* a, char* func){
+	if (strcmp("list", func) == 0) { return builtin_list(a); }
+    if (strcmp("head", func) == 0) { return builtin_head(a); }
+ 	if (strcmp("tail", func) == 0) { return builtin_tail(a); }
+    if (strcmp("join", func) == 0) { return builtin_join(a); }
+    if (strcmp("eval", func) == 0) { return builtin_eval(a); }
+    if (strstr("+-/*", func)) { return builtin_op(a, func); }
+    lval_del(a);
+    return lval_err("Unknown Function!");
+}
+
 // //does the math evaluation between x y and the operator 
 // lval eval_op(lval x, char* op, lval y){
 // 	//if either x or y type is error, return it
@@ -516,23 +657,32 @@ int main(int argc, char** argv){
 	mpc_parser_t* Symbol = mpc_new("symbol");
 	mpc_parser_t* Sexpr = mpc_new("sexpr");
 	mpc_parser_t* Expr = mpc_new("expr");
+
+	//chapter 10, added Qexpr
+	mpc_parser_t* Qexpr = mpc_new("qexpr");
+
 	//This parser is essentially the "sentence" itself, it will be built
 	//from the components above 
 	mpc_parser_t* Jlispy = mpc_new("jlispy");
+
+
 
 	//Defining parsers with the following language
 	//uses Regular expressions to define rules 
 
 
+	//chapter 10, added more symbols for Q-expressions
 	mpca_lang(MPCA_LANG_DEFAULT, 
-		"                                                    \
-		number   : /-?[0-9]+/ ;                              \
-		symbol   : '+' | '-' | '*' | '/';                    \
-		sexpr     : '('<expr>*')';                           \
-		expr    : <number> | <symbol> | <sexpr>;             \
-		jlispy   : /^/ <expr>* /$/ ;                         \
+		"                                                              \
+		number   : /-?[0-9]+/ ;                                        \
+        symbol : \"list\" | \"head\" | \"tail\"                        \
+                 | \"join\" | \"eval\" | '+' | '-' | '*' | '/' ;       \
+		sexpr    : '('<expr>*')';                                      \
+		qexpr    : '{' <expr>* '}' ;                                   \
+		expr     : <number> | <symbol> | <sexpr> | <qexpr>;            \
+		jlispy   : /^/ <expr>* /$/ ;                                   \
 		",
-		Number, Symbol, Sexpr, Expr, Jlispy);
+		Number, Symbol, Sexpr, Qexpr, Expr, Jlispy);
 
 
 
@@ -596,7 +746,7 @@ int main(int argc, char** argv){
 	}
 
 	//deletes our parsers 
-	mpc_cleanup(5, Number, Symbol, Sexpr, Expr, Jlispy);
+	mpc_cleanup(6, Number, Symbol, Sexpr, Qexpr, Expr, Jlispy);
 
 	return 0;
 }
